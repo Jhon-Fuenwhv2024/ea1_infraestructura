@@ -1,0 +1,102 @@
+name: EA1 Infraestructura - Ingesta MySQL
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  ingestion:
+    runs-on: ubuntu-latest
+
+    # Servicio MySQL 8 sin contraseña (igual que XAMPP por defecto).
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: ea1_ingestion_db
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot --silent"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+
+    env:
+      MYSQL_HOST: 127.0.0.1
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ""
+      MYSQL_DATABASE: ea1_ingestion_db
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar cliente MySQL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mysql-client
+
+      - name: Instalar dependencias
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Esperar a que MySQL acepte conexiones TCP
+        run: |
+          for i in $(seq 1 40); do
+            if mysqladmin ping -h127.0.0.1 -uroot --silent; then
+              echo "MySQL listo"
+              exit 0
+            fi
+            echo "Esperando MySQL... intento $i"
+            sleep 3
+          done
+          echo "MySQL no respondió a tiempo" >&2
+          exit 1
+
+      - name: Ejecutar script de ingesta
+        run: python src/ingestion.py
+
+      - name: Verificar filas en MySQL
+        run: |
+          COUNT=$(mysql -h127.0.0.1 -uroot -N -e "SELECT COUNT(*) FROM ea1_ingestion_db.breweries;")
+          echo "Filas en MySQL: $COUNT"
+          if [ -z "$COUNT" ] || [ "$COUNT" -lt 100 ]; then
+            echo "Se esperaban al menos 100 filas en MySQL" >&2
+            exit 1
+          fi
+
+      - name: Verificar archivos de evidencia
+        run: |
+          test -s src/xlsx/ingestion.xlsx
+          test -s src/static/auditoria/ingestion.txt
+          echo "Evidencias OK"
+          ls -lah src/xlsx/ingestion.xlsx src/static/auditoria/ingestion.txt
+          echo "----- Auditoría -----"
+          cat src/static/auditoria/ingestion.txt
+
+      - name: Generar dump SQL de la base de datos
+        run: |
+          mkdir -p src/db
+          mysqldump -h127.0.0.1 -uroot --single-transaction --databases ea1_ingestion_db > src/db/ingestion.sql
+          test -s src/db/ingestion.sql
+          echo "Dump SQL generado ($(wc -c < src/db/ingestion.sql) bytes)"
+
+      - name: Subir artefactos de evidencia
+        uses: actions/upload-artifact@v4
+        with:
+          name: ea1-ingestion-evidence
+          path: |
+            src/xlsx/ingestion.xlsx
+            src/static/auditoria/ingestion.txt
+            src/db/ingestion.sql
+          if-no-files-found: error
