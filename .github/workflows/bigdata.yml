@@ -48,7 +48,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install -e .
 
       - name: Esperar a que MySQL acepte conexiones TCP
         run: |
@@ -68,7 +67,7 @@ jobs:
 
       - name: Verificar filas en MySQL
         run: |
-          COUNT=$(mysql -h127.0.0.1 -uroot -N -e "SELECT COUNT(*) FROM ea1_ingestion_db.breweries;")
+          COUNT=$(mysql -h127.0.0.1 -uroot -N -e "SELECT COUNT(*) FROM ea1_ingestion_db.cerveceria;")
           echo "Filas en MySQL: $COUNT"
           if [ -z "$COUNT" ] || [ "$COUNT" -lt 100 ]; then
             echo "Se esperaban al menos 100 filas en MySQL" >&2
