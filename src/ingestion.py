@@ -38,24 +38,26 @@ API_URL = "https://api.openbrewerydb.org/v1/breweries"
 PER_PAGE = 200
 MAX_PAGES = 100  # límite de seguridad; el catálogo público supera los 10k registros
 
-COLUMNS = [
-    "id",
-    "name",
-    "brewery_type",
-    "address_1",
-    "address_2",
-    "address_3",
-    "city",
-    "state_province",
-    "postal_code",
-    "country",
-    "longitude",
-    "latitude",
-    "phone",
-    "website_url",
-    "state",
-    "street",
-]
+API_TO_DB = {
+    "id": "id",
+    "name": "nombre",
+    "brewery_type": "tipo_cerveza",
+    "address_1": "direccion_1",
+    "address_2": "direccion_2",
+    "address_3": "direccion_3",
+    "city": "ciudad",
+    "state_province": "estado_provincia",
+    "postal_code": "codigo_postal",
+    "country": "pais",
+    "longitude": "longitud",
+    "latitude": "latitud",
+    "phone": "telefono",
+    "website_url": "sitio_web",
+    "state": "estado",
+    "street": "direccion_4",
+}
+DB_COLUMNS = list(API_TO_DB.values())
+DB_TO_API = {db_name: api_name for api_name, db_name in API_TO_DB.items()}
 
 
 def load_config() -> dict[str, Any]:
@@ -190,11 +192,12 @@ def create_table(conn: pymysql.Connection) -> None:
 
 
 def _normalize(row: dict[str, Any]) -> tuple[Any, ...]:
-    """Normaliza un registro de la API al orden de columnas de la tabla."""
+    """Normaliza un registro de la API al orden exacto de columnas de la tabla."""
     values: list[Any] = []
-    for col in COLUMNS:
-        val = row.get(col)
-        if col in ("longitude", "latitude"):
+    for db_col in DB_COLUMNS:
+        api_col = DB_TO_API.get(db_col, db_col)
+        val = row.get(api_col)
+        if api_col in ("longitude", "latitude"):
             if val is None or val == "":
                 values.append(None)
             else:
@@ -213,11 +216,11 @@ def _normalize(row: dict[str, Any]) -> tuple[Any, ...]:
 
 def upsert_records(conn: pymysql.Connection, records: list[dict[str, Any]]) -> int:
     """Inserta o actualiza registros (idempotente vía ON DUPLICATE KEY UPDATE)."""
-    placeholders = ", ".join(["%s"] * len(COLUMNS))
-    col_list = ", ".join(f"`{c}`" for c in COLUMNS)
-    updates = ", ".join(f"`{c}` = VALUES(`{c}`)" for c in COLUMNS if c != "id")
+    placeholders = ", ".join(["%s"] * len(DB_COLUMNS))
+    col_list = ", ".join(f"`{c}`" for c in DB_COLUMNS)
+    updates = ", ".join(f"`{c}` = VALUES(`{c}`)" for c in DB_COLUMNS if c != "id")
     sql = (
-        f"INSERT INTO Cervecia ({col_list}) VALUES ({placeholders}) "
+        f"INSERT INTO cerveceria ({col_list}) VALUES ({placeholders}) "
         f"ON DUPLICATE KEY UPDATE {updates}"
     )
 
@@ -270,19 +273,25 @@ def write_audit(
     extra_in_db = sorted(db_ids - api_ids)
     common = api_ids & db_ids
 
-    key_fields = ["nombre", "tipo_cerveza", "ciudad", "pais", "estado_provincia"]
+    key_fields = [
+        ("name", "nombre"),
+        ("brewery_type", "tipo_cerveza"),
+        ("city", "ciudad"),
+        ("country", "pais"),
+        ("state_province", "estado_provincia"),
+    ]
     mismatches: list[str] = []
     for rid in sorted(common):
         api_row = api_by_id[rid]
         db_row = db_by_id[rid]
-        for field in key_fields:
-            api_val = api_row.get(field)
-            db_val = db_row.get(field)
+        for api_field, db_field in key_fields:
+            api_val = api_row.get(api_field)
+            db_val = db_row.get(db_field)
             api_norm = None if api_val is None or str(api_val).strip() == "" else str(api_val).strip()
             db_norm = None if db_val is None or str(db_val).strip() == "" else str(db_val).strip()
             if api_norm != db_norm:
                 mismatches.append(
-                    f"  - id={rid} campo={field}: API={api_norm!r} DB={db_norm!r}"
+                    f"  - id={rid} API[{api_field}]={api_norm!r} | DB[{db_field}]={db_norm!r}"
                 )
 
     counts_match = len(api_ids) == len(db_ids) and not missing_in_db and not extra_in_db
@@ -306,7 +315,7 @@ def write_audit(
         f"   ¿Coinciden los conteos?       : {'SÍ' if counts_match else 'NO'}",
         "",
         "2. INTEGRIDAD DE CAMPOS CLAVE",
-        f"   Campos comparados: {', '.join(key_fields)}",
+        "   Campos comparados: name↔nombre, brewery_type↔tipo_cerveza, city↔ciudad, country↔pais, state_province↔estado_provincia",
         f"   Registros comunes : {len(common)}",
         f"   Discrepancias     : {len(mismatches)}",
         f"   ¿Campos coinciden?: {'SÍ' if fields_ok else 'NO'}",

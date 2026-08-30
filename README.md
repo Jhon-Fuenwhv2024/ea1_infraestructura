@@ -79,7 +79,6 @@ venv\Scripts\activate
 
 ```bash
 pip install -r requirements.txt
-pip install -e .
 ```
 
 ### 4.4 Configurar variables de entorno para XAMPP
